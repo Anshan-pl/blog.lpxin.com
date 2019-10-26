@@ -202,6 +202,15 @@ ens192 ens224
 ```
 不过基本上这些信息都可以直接通过/proc/net/bonding/bond0文件获取，建议直接使用cat /proc/net/bonding/bond0查看。
 
+## 修改bond模式
+```
+[root@localhost ~]# nmcli con modify bond0 mode 0
+[root@localhost ~]# nmcli con reload bond0
+[root@localhost ~]# nmcli con down bond0
+Connection 'bond0' successfully deactivated (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/30)
+[root@localhost ~]# nmcli con up bond0
+Connection successfully activated (master waiting for slaves) (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/33)
+```
 # 定位多网卡物理位置
 通过ethtool命令可以很方便的定位到多网卡环境下故障的链路，因为其效果是使其对应网口的链路灯闪烁，所以可以很方便的确定到故障网口的位置：
 ```
@@ -245,3 +254,76 @@ ethtool -p enp1s0f0
 下面的视频演示了两个点亮网口命令，因为是优酷的视频源，不是https协议所以在大部分浏览器可能会被拦截认定为不安全的内容，如我这里使用的Chrome浏览器，可以通过点击地址栏最后方中小盾牌图标“加载不安全脚本”按钮来查看演示视频：
 
 <iframe height=498 width=510 src='http://player.youku.com/embed/XNDM0MTI5MzA5Ng==' frameborder=0 'allowfullscreen'></iframe>
+
+
+# 记19/10/18日bond无法up，光模块不发光情况
+在一次H3C更新BIOS，启动系统后bond up不起来，且光模块和光纤都有，并单网口也up不起来，多次尝试修复后都无效，最后确定为网卡速率模式问题导致。在系统下使用ethtool下查看千兆单网卡Speed速率为25000Mb/s，这是不正常的，可以使用ethtool命令来关闭网卡的Auto-negotiation自动速率协商，并强制指定网卡的速率即可。
+```
+[root@localhost ~]# ethtool -s ens38 autoneg off speed 1000
+#注意：ethtool命令设置网卡属性后仅是单次生效，重启后就失效了，如果想永久生效那么请使用下列命令:
+
+[root@localhost ~]# echo 'ETHTOOL_OPTS="speed 100 duplex full autoneg off"' >> /etc/sysconfig/network-scripts/ifcfg-ens38
+#使用echo命令将配置追加到网卡配置文件即可。
+```
+## 单网卡启动
+在配置完bond后，需要先启动bond的从属网卡后，才可以启动bond生效。
+```
+[root@localhost ~]# ip link set ens38 up
+[root@localhost ~]# ifup ens38 up
+#这里使用的是两种命令启动单网卡，当然也可以使用nmcli来启动。
+
+[root@localhost ~]# nmcli con up bond0
+Connection successfully activated (master waiting for slaves) (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/39)
+[root@localhost ~]# nmcli d connect bond0
+Device 'bond0' successfully activated with 'd796410e-f4f1-4650-82e3-2fe66ec4c60d'.
+#这里启用bond使用的是nmcli命令，这里无所谓使用那条命令来启动单网卡或bond。
+```
+最后，使用ethtool命令来查看一下接口和bond的信息：
+```
+[root@localhost ~]# ethtool ens38
+Settings for ens38:
+        Supported ports: [ TP ]
+        Supported link modes:   10baseT/Half 10baseT/Full
+                                100baseT/Half 100baseT/Full
+                                1000baseT/Full
+        Supported pause frame use: No
+        Supports auto-negotiation: Yes
+        Supported FEC modes: Not reported
+        Advertised link modes:  1000baseT/Full
+        Advertised pause frame use: No
+        Advertised auto-negotiation: Yes
+        Advertised FEC modes: Not reported
+        Speed: 1000Mb/s
+        Duplex: Full
+        Port: Twisted Pair
+        PHYAD: 0
+        Transceiver: internal
+        Auto-negotiation: on
+        MDI-X: off (auto)
+        Supports Wake-on: d
+        Wake-on: d
+        Current message level: 0x00000007 (7)
+                               drv probe link
+        Link detected: yes
+#这里我使用测试环境是虚拟机，所以两张网卡是一样的，可以看到从属接口的speed速率为1000Mb/s，作了bond后如果模式是用带宽聚合效果的那么查看bond接口的话，其速率应该为两个从属接口speed速率之和。
+
+[root@localhost ~]# ethtool bond0
+Settings for bond0:
+        Supported ports: [ ]
+        Supported link modes:   Not reported
+        Supported pause frame use: No
+        Supports auto-negotiation: No
+        Supported FEC modes: Not reported
+        Advertised link modes:  Not reported
+        Advertised pause frame use: No
+        Advertised auto-negotiation: No
+        Advertised FEC modes: Not reported
+        Speed: 2000Mb/s
+        Duplex: Full
+        Port: Other
+        PHYAD: 0
+        Transceiver: internal
+        Auto-negotiation: off
+        Link detected: yes
+#可以看到，现在我们使用的bond模式为mode6（balance-alb），有带宽聚合效果，所以bond0的speed速率为2000Mb/s，双从属接口速率之和。
+```

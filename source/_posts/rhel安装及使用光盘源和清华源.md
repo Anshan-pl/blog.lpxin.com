@@ -305,6 +305,9 @@ cp: overwrite '/boot/efi/EFI/redhat/grubenv'? y
 cp: overwrite '/boot/efi/EFI/redhat/grub.cfg'? y
 #恢复redhat的efi引导项
 ```
+# rhel7添加epel扩展库
+`yum install epel-release -y`
+
 ## rhel7修改语言
 ### 修改系统为中文
 ```

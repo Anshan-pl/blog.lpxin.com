@@ -14,20 +14,15 @@ categories: INTRO
 那么 请一直关注哟<br/>
 Welcome to Xinyuan~<br/>
 
-![fine](/images/post/top.gif "fine")
+<!--![fine](/images/post/top.gif "fine")-->
 </center>
 <!--more-->
 
 ## 关于我
-毕业于安徽警官学院，等待19年6月专科毕业证和20年6月安徽大学自考本科证
-喜欢计算机，开关机，拔插U盘，~~包括但不限于硬件电路、linux kernel、windows、c、php、python、shell、bat~~
-不得不强调的一个爱好是~~喜欢吃~~
-和自己的女朋友一起走遍所有值得去的地方
-~~![女朋友]\(/images/post/lpx.jpg "嗯，为了避免引狼，这里就文字出现，自行脑补吧")~~
-嗯，应该算是一条~~有灵魂的~~咸鱼
+~~咸鱼~~
 
 ## 关于本站
-由于在备考公务员，时间上没有那么宽裕
+由于现在已经在工作，并学习新鲜事物，时间上没有那么宽裕
 但只要闲下来，就会分享新奇或者有用的知识
 所以请多多关注
 
