@@ -258,7 +258,311 @@ Check Consistency
 |spares|有效的局部热备盘数量|指定需要分配给此RAID组的热备盘数量。|
 |force|-|强制将具有安全功能的物理驱动器添加到未开启安全功能的RAID组中。|
 
+## 配置RAID失败(2021.05.31记)
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0 add vd r1 drives=0:6,10
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Failure
+Description = resources already in use
+```
+
+我们查看下`s6`和`s10`这两块盘的状态
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0 show
+
+PD LIST :
+=======
+
+------------------------------------------------------------------------------
+EID:Slt DID State DG       Size Intf Med SED PI SeSz Model            Sp Type
+------------------------------------------------------------------------------
+0:0      14 Onln   0 558.406 GB SAS  HDD N   N  512B HUC101860CSS200  U  -
+0:4      13 Onln   0 558.406 GB SAS  HDD N   N  512B AL14SEB060N      U  -
+0:6      10 UGood  F   3.637 TB SAS  HDD N   N  512B ST4000NM0023     U  -
+0:10     11 UGood  -   3.637 TB SAS  HDD N   N  512B ST4000NM0023     D  -
+------------------------------------------------------------------------------
+```
+
+可以看到，这里的`s10`的`Spun`状态为`DOWN`，我们尝试将其设置为`UP`
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0/e0/s10 spinup
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Failure
+Description = Spin Up Drive Failed.
+
+Detailed Status :
+===============
+
+------------------------------------------------------------------------
+Drive      Status  ErrCd ErrMsg
+------------------------------------------------------------------------
+/c0/e0/s10 Failure    50 device state doesn't support requested command
+------------------------------------------------------------------------
+```
+
+提示错误，继续尝试清理`PD`硬盘状态：
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0/e0/s10 start erase simple
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Success
+Description = Start Drive Erase Succeeded
+
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0/e0/s10 show erase
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Success
+Description = Show Drive Erase Status Succeeded.
+
+
+-----------------------------------------------------
+Drive-ID   Progress% Status      Estimated Time Left
+-----------------------------------------------------
+/c0/e0/s10         3 In progress -
+-----------------------------------------------------
+
+# earse 除了擦除 PD 状态，还会擦除数据，4T 硬盘耗时还是比较久的，且擦盘期间IO异常的慢，建议空闲时进行，可以先stop
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0/e0/s10 stop erase
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Success
+Description = Stop Drive Erase Succeeded.
+
+# 因为我只需要他的Spin状态复位就行了， 查看盘的Sp状态为U，就可以 stop erase 了，不用等擦除全部跑完
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0/e0/s10 show
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Success
+Description = Show Drive Information Succeeded.
+
+
+Drive Information :
+=================
+
+----------------------------------------------------------------------------
+EID:Slt DID State DG     Size Intf Med SED PI SeSz Model            Sp Type
+----------------------------------------------------------------------------
+0:10     11 UGood -  3.637 TB SAS  HDD N   N  512B ST4000NM0023     U  -
+----------------------------------------------------------------------------
+
+# 注意，sp状态为UP后，将其down，再up一次，否则可能过会就自己down了.
+# down
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0/e0/s10 spindown
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Success
+Description = Spin Down Drive Succeeded.
+
+# up
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0/e0/s10 spinup
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Success
+Description = Spin Up Drive Succeeded.
+```
+
+解决了`s10`盘`sp`状态`down`问题后，我们继续解决`s6`的`DG`字段为`F`（存在外部`RAID`配置）的问题：
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0 show
+
+PD LIST :
+=======
+
+------------------------------------------------------------------------------
+EID:Slt DID State DG       Size Intf Med SED PI SeSz Model            Sp Type
+------------------------------------------------------------------------------
+0:0      14 Onln   0 558.406 GB SAS  HDD N   N  512B HUC101860CSS200  U  -
+0:4      13 Onln   0 558.406 GB SAS  HDD N   N  512B AL14SEB060N      U  -
+0:6      10 UGood  F   3.637 TB SAS  HDD N   N  512B ST4000NM0023     U  -
+0:10     11 UGood  -   3.637 TB SAS  HDD N   N  512B ST4000NM0023     U  -
+------------------------------------------------------------------------------
+```
+
+可以看到`s6`的DG为F， 表示有外部的`RAID`配置信息，应该是之前的`RAID`信息没有清理，我们使用`fall`查看下：
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0/fall show
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Success
+Description = Operation on foreign configuration Succeeded
+
+
+FOREIGN CONFIGURATION :
+=====================
+
+----------------------------------------
+DG EID:Slot Type   State     Size NoVDs
+----------------------------------------
+ 0 -        Nytro1 Frgn  3.637 TB     1
+----------------------------------------
+
+NoVDs - Number of VD in Drive Group
+DG=Disk Group Index|Arr=Array Index|Row=Row Index|EID=Enclosure Device ID
+DID=Device ID|Type=Drive Type|Onln=Online|Rbld=Rebuild|Optl=Optimal|Dgrd=Degraded
+Pdgd=Partially degraded|Offln=Offline|BT=Background Task Active
+PDC=PD Cache|PI=Protection Info|SED=Self Encrypting Drive|Frgn=Foreign
+DS3=Dimmer Switch 3|dflt=Default|Msng=Missing|FSpace=Free Space Present
+TR=Transport Ready
+
+Total foreign Drive Groups = 1
+```
+
+回显中有一个外部的`RAID`信息，使用命令`storcli /c0/fall delete`删除掉控制器c0的所有外部配置信息，删除后DG状态为空，可以正常使用：
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0/fall delete
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Success
+Description = Successfully deleted foreign configuration
+
+再次`show`一下：
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0 show
+
+PD LIST :
+=======
+
+------------------------------------------------------------------------------
+EID:Slt DID State DG       Size Intf Med SED PI SeSz Model            Sp Type
+------------------------------------------------------------------------------
+0:0      14 Onln   0 558.406 GB SAS  HDD N   N  512B HUC101860CSS200  U  -
+0:4      13 Onln   0 558.406 GB SAS  HDD N   N  512B AL14SEB060N      U  -
+0:6      10 UGood  -   3.637 TB SAS  HDD N   N  512B ST4000NM0023     U  -
+0:10     11 UGood  -   3.637 TB SAS  HDD N   N  512B ST4000NM0023     U  -
+------------------------------------------------------------------------------
+
+OK，两块盘都没问题了， 尝试做`raid1`：
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# ./storcli64 /c0 add vd r1 drives=0:6,10
+CLI Version = 007.1705.0000.0000 Mar 31, 2021
+Operating system = Linux 4.4.0-131-generic
+Controller = 0
+Status = Success
+Description = Add VD Succeeded.
+
+#出现了sdc，分区信息不用管
+root@ubuntu:/opt/MegaRAID/storcli# lsblk
+NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINT
+sda      8:0    0   7.3T  0 disk
+|-sda1   8:1    0   128M  0 part
+`-sda2   8:2    0   7.3T  0 part /data
+sdb      8:16   0 558.4G  0 disk
+|-sdb1   8:17   0   953M  0 part /boot
+`-sdb2   8:18   0 557.5G  0 part /
+sdc      8:32   0   3.7T  0 disk
+|-sdc1   8:33   0   100M  0 part
+`-sdc2   8:34   0 278.8G  0 part
+
+root@ubuntu:/opt/MegaRAID/storcli# fdisk -l /dev/sdc
+Disk /dev/sdc: 3.7 TiB, 4000225165312 bytes, 7812939776 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 4096 bytes
+I/O size (minimum/optimal): 4096 bytes / 4096 bytes
+```
+
+配置文件系统，挂载结束（如果担心，可以先用fdisk或者看下）:
+
+```shell
+root@ubuntu:/opt/MegaRAID/storcli# fdisk -l /dev/sdc
+Disk /dev/sdc: 3.7 TiB, 4000225165312 bytes, 7812939776 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 4096 bytes
+I/O size (minimum/optimal): 4096 bytes / 4096 bytes
+# 无分区信息
+
+root@ubuntu:/opt/MegaRAID/storcli# parted -l
+Model: JMicron Tech (scsi)
+Disk /dev/sda: 8002GB
+Sector size (logical/physical): 512B/4096B
+Partition Table: gpt
+Disk Flags:
+
+Number  Start   End     Size    File system  Name                          Flags
+ 1      17.4kB  134MB   134MB                Microsoft reserved partition  msftres
+ 2      135MB   8002GB  8001GB  ntfs         Basic data partition          msftdata
+
+
+Model: LSI MR ROMB (scsi)
+Disk /dev/sdb: 600GB
+Sector size (logical/physical): 512B/4096B
+Partition Table: msdos
+Disk Flags:
+
+Number  Start   End     Size   Type     File system  Flags
+ 1      1049kB  1000MB  999MB  primary  ext4
+ 2      1000MB  600GB   599GB  primary  ext4         boot
+
+
+Error: /dev/sdc: unrecognised disk label
+Model: LSI MR ROMB (scsi)
+Disk /dev/sdc: 4000GB
+Sector size (logical/physical): 512B/4096B
+Partition Table: unknown
+Disk Flags:
+# 无分区信息
+
+root@ubuntu:/opt/MegaRAID/storcli# blkid /dev/sdc
+# 同样无输出，没有分区信息，放心的做文件系统吧
+
+root@ubuntu:/opt/MegaRAID/storcli# mkfs.ext4 /dev/sdc
+mke2fs 1.42.13 (17-May-2015)
+Creating filesystem with 976617472 4k blocks and 244154368 inodes
+Filesystem UUID: 86a425b2-8853-49af-8b03-bf9844736ea9
+Superblock backups stored on blocks:
+        32768, 98304, 163840, 229376, 294912, 819200, 884736, 1605632, 2654208,
+        4096000, 7962624, 11239424, 20480000, 23887872, 71663616, 78675968,
+        102400000, 214990848, 512000000, 550731776, 644972544
+
+Allocating group tables: done
+Writing inode tables: done
+Creating journal (32768 blocks): done
+Writing superblocks and filesystem accounting information: done
+
+root@ubuntu:/opt/MegaRAID/storcli# mkdir /data2
+root@ubuntu:/opt/MegaRAID/storcli# mount /dev/sdc /data2
+root@ubuntu:/opt/MegaRAID/storcli# ls /data2
+lost+found
+root@ubuntu:/opt/MegaRAID/storcli# df -Th
+Filesystem     Type      Size  Used Avail Use% Mounted on
+udev           devtmpfs   63G     0   63G   0% /dev
+tmpfs          tmpfs      13G   74M   13G   1% /run
+/dev/sdb2      ext4      549G  2.8G  518G   1% /
+tmpfs          tmpfs      63G     0   63G   0% /dev/shm
+tmpfs          tmpfs     5.0M     0  5.0M   0% /run/lock
+tmpfs          tmpfs      63G     0   63G   0% /sys/fs/cgroup
+/dev/sdb1      ext4      922M   59M  801M   7% /boot
+tmpfs          tmpfs      13G     0   13G   0% /run/user/0
+/dev/sda2      fuseblk   7.3T  3.3T  4.1T  45% /data
+/dev/sdc       ext4      3.6T   68M  3.4T   1% /data2
+```
+
+**2021.05.31 完工！**
+
+
+
 # 扩展RAID组容量
+
 这里刚刚创建了一个容量为300GB的RAID5没有使用全部的硬盘容量，所以可以进行扩展：
 以下的例子我将其扩大800GB，好像没有找到参数可以直接扩展为RAID的所有容量：
 ```
